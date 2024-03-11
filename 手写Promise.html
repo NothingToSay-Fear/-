@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh">
+	<head>
+		<meta charset="UTF-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<meta http-equiv="X-UA-Compatible" content="ie=edge">
+		<title></title>
+	</head>
+
+	<body>
+		<script type="text/javascript">
+			const PENDING = 'pending'
+			const FULFILLED = 'fulfilled'
+			const REJECTED = 'rejected'
+
+			class MyPromise {
+
+
+				constructor(executor) {
+					this._state = PENDING
+					this._result = undefined
+					this.handlers = []
+					const resolve = (data) => {
+						this.changeState(FULFILLED, data)
+					}
+					const reject = (reason) => {
+						this.changeState(REJECTED, reason)
+					}
+
+					try {
+						//Promise执行executor时报错，会将状态改为rejected，并且返回错误对象
+						executor(resolve, reject)
+					} catch (e) {
+						reject(e)
+					}
+
+				}
+
+				changeState(state, result) {
+					//如果不是pending状态的Promise,则是已完成的Promise,不能更改状态
+					if (this._state !== PENDING) return
+					//改变状态
+					this._state = state
+					this._result = result
+					this.run()
+				}
+
+				//判断值是否Promise(符合Promise A+规范)
+				isPromiseLike(value) {
+					if (value !== null && (typeof value === 'object' || typeof value === 'function')) {
+						return typeof value.then === 'function';
+					}
+					return false
+				}
+
+				//将函数放到微队列执行
+				runMicroTask(func) {
+					if (typeof process === 'object' && typeof process.nextTick === 'function') {
+						//node环境
+						process.nextTick(func)
+					} else if (typeof MutationObserver === 'function') {
+						//浏览器环境并且有MutationObserver的时候
+						const ob = new MutationObserver(func);
+						const textNode = document.createTextNode('1')
+						ob.observe(textNode, {
+							characterData: true
+						});
+						textNode.data = '2'
+					} else {
+						//实在没办法只能用setTimeout模拟微队列
+						setTimeout(func, 0)
+					}
+				}
+
+				runOne(callback, resolve, reject) {
+					this.runMicroTask(() => {
+						if (typeof callback !== 'function') {
+							//1.如果then的处理onFulfilled或onRejected不是函数，则then返回的Promise将会resolve或reject掉then所属的Promise(已完成的Prmise)的result
+							const settled = this._state === FULFILLED ? resolve : reject;
+							settled(this._result)
+							return
+						}
+						try {
+							//2.如果then的处理onFulfilled或onRejected是函数，则会返回onFulfilled或onRejected的结果
+							const data = callback(this._result)
+							if (this.isPromiseLike(data)) {
+								//3.如果在2的基础上，结果是一个Promise,则会执行结果Promise的then方法
+								data.then(resolve, reject)
+							} else {
+								resolve(data)
+							}
+						} catch (e) {
+							reject(e)
+						}
+					})
+
+				}
+
+				run() {
+					//调用run方法时有可能还是pending状态
+					if (this._state === PENDING) return
+					while (this.handlers.length) {
+						const {
+							onFulfilled,
+							onRejected,
+							resolve,
+							reject
+						} = this.handlers.shift()
+						if (this._state === FULFILLED) {
+							this.runOne(onFulfilled, resolve, reject)
+						} else {
+							this.runOne(onRejected, resolve, reject)
+						}
+					}
+				}
+
+				// then方法解决两个问题
+				// 1.什么时候调用onFulfilled或onRejected方法
+				// 2.什么时候 返回的Promise是要调用resolve或reject
+				then(onFulfilled, onRejected) {
+					return new MyPromise((resolve, reject) => {
+						//解决问题1:在Promise状态变为fulfilled或rejected的时候执行onFulfilled或onRejected方法(所以是在changeState方法里执行)
+						//又一个问题:changeState里面拿不到onFulfilled和onRejected方法
+						//解决上面的问题:设置一个handlers数组去存起来这些方法(为什么是数组:可能会调用多次then)，then方法的时候负责存起这些方法，在changeState的时候再调用(run方法)
+						this.handlers.push({
+							onFulfilled,
+							onRejected,
+							resolve,
+							reject
+						})
+						this.run()
+					})
+				}
+
+			}
+
+			// Promise是捕获不到异步的错误的
+			// const p = new Promise((resolve, reject) => {
+			// 	setTimeout(() => {
+			// 		throw 123
+			// 	}, 1000)
+			// })
+			// console.log(p)
+
+			setTimeout(() => {
+				console.log(1)
+			}, 0)
+
+			new MyPromise((resolve) => {
+				resolve(2)
+			}).then((data) => {
+				return new MyPromise((resolve, reject) => {
+					resolve(999)
+				})
+			}).then((data) => {
+				console.log(data)
+			})
+			console.log(3)
+		</script>
+	</body>
+</html>
